@@ -73,5 +73,44 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 服务编排组合：共用规则与判定顺序
+
+预演、真实执行和失败回滚共用 `backend/app/services/orchestration_rules.py` 里的
+同一份规则表与同一个判定实现；调用限流降级引用同一个 `RULE_VERSION`
+（当前 `ORCH-RULES-2026.11.1`），版本不一致时拒绝降级。规则表可通过
+`GET /api/orchestra/rules` 与 `GET /api/limiter/rules` 查看。
+
+判定顺序固定为：
+
+1. 状态门禁：草稿不能进入预演；已完成/已回滚不能再次回滚；
+2. 并行分组：在 `compile_plan` 中一次性编译成快照，不会在步骤超时后才补判；
+3. 资源争用：同一并行分组内争用同一资源时，先按 `priority` 数值升序裁决，
+   落败分支记为阻塞（`ORCH-RESOURCE-001`），不参与后续超时判断；
+4. 超时：`estimated_seconds > 超时上限`（默认 90 秒）记为超时（`ORCH-TIMEOUT-001`）；
+5. 依赖级联：上游阻塞或超时的下游步骤记为阻塞（`ORCH-DEPEND-001`）；
+6. 输出：`executable_steps`（可执行步骤）、`blocked_steps`（阻塞步骤）、
+   `timed_out_steps`（超时步骤）与逐步骤 `checklist`。
+
+执行时固化 `plan_snapshot` 与 `plan_digest`；回滚只读取该快照，不读取当前编排步骤。
+每次执行只写一条自洽日志，不会同时出现“已完成”和“失败”。历史日志里既标已完成
+又标失败的旧记录，会在读取时归一为单一失败结果。
+
+### 接口
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /api/orchestra/rules` | 共用规则表与规则版本 |
+| `POST /api/orchestra/{id}/dry-run` | 预演，只读判定，草稿返回拒绝 |
+| `POST /api/orchestra/{id}/execute` | 真实执行，固化执行快照 |
+| `POST /api/orchestra/{id}/rollback` | 按执行快照回滚，事先校验状态门禁 |
+| `PUT /api/orchestra/{id}` | 修改编排步骤，终态流程不允许修改 |
+| `POST /api/orchestra/{id}/actions` | 兼容入口，按动作名分发到同一判定实现 |
+
+用 90 秒超时与两组并行步骤核对编排结果清单：
+
+```bash
+cd backend && .venv/bin/python -m unittest tests.test_orchestration_rules -v
+```
+
 领域：数据工程
 子方向：数据分析与数据应用

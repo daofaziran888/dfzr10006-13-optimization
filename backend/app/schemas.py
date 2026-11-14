@@ -19,11 +19,20 @@ class ActionResult(BaseModel):
     ok: bool
     message: str
     entry: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
 
 
 class EntryPayload(BaseModel):
     """登记或修改一条业务记录时提交的字段集合。"""
 
+    values: dict[str, Any] = Field(default_factory=dict)
+    remark: str | None = None
+
+
+class OrchestrationRunPayload(BaseModel):
+    """编排预演/执行/回滚入参：超时上限默认 90 秒，也允许放在 values 里。"""
+
+    timeout_seconds: int | None = None
     values: dict[str, Any] = Field(default_factory=dict)
     remark: str | None = None
 
